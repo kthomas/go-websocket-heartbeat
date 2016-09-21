@@ -186,11 +186,11 @@ func unlink(staleConn *websocket.Conn) {
 func SqsQueueHandler(message *ktsqs.Message) {
 	go func() {
 		for _, ws := range sockets {
-			bytes, err := json.Marshal(&message)
+			payload, err := json.Marshal(&message)
 			if err != nil {
 				log.Printf("Failed to marshal message received from SQS queue to JSON; error: %s", err.Error())
 			} else {
-				send(bytes, ws)
+				send(payload, ws)
 			}
 		}
 	}()
