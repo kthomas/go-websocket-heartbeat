@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"golang.org/x/net/websocket"
 	"log"
@@ -62,7 +63,7 @@ func readFrame(ws *websocket.Conn) (error) {
 		return err
 	}
 
-	var payload []byte
+	var payload = make([]byte, frameReader.Len(), frameReader.Len())
 	length, err := frameReader.Read(payload)
 	if err != nil {
 		log.Printf("Failed to receive on websocket: %s", ws.Request().RemoteAddr)
@@ -70,7 +71,9 @@ func readFrame(ws *websocket.Conn) (error) {
 	}
 	payloadType := frameReader.PayloadType()
 
-	if payloadType == websocket.PingFrame {
+	if payloadType == websocket.ContinuationFrame {
+		log.Printf("Received %v-byte continuation frame on websocket %s; payload: %s", length, ws.Request().RemoteAddr, string(payload))
+	} else if payloadType == websocket.PingFrame {
 		log.Printf("Received %v-byte ping frame on websocket: %s", length, ws.Request().RemoteAddr)
 		pong(ws)
 	} else if payloadType == websocket.PongFrame {
@@ -80,6 +83,7 @@ func readFrame(ws *websocket.Conn) (error) {
 
 		queueUrl := os.Getenv("AWS_SQS_QUEUE_PUBLISH_URL")
 		if queueUrl != "" {
+			payload = bytes.Trim(payload, "\x00")
 			push(queueUrl, string(payload))
 		}
 	}
@@ -148,14 +152,14 @@ func push(queueUrl string, payload string) {
 		svc := sqs.New(session.New())
 		params := &sqs.SendMessageInput{
 			QueueUrl:	aws.String(url),
-			MessageBody:	&payload,
+			MessageBody:	aws.String(payload),
 		}
 
 		response, err := svc.SendMessage(params)
 		if err != nil {
 			log.Println("Encountered error while sending to SQS queue; " + err.Error())
 		} else {
-			log.Printf("Sent message to SQS queue; message id: %s", response.MessageId)
+			log.Printf("Sent message to SQS queue; message id: %s", &response.MessageId)
 		}
 	}(queueUrl)
 }
@@ -182,9 +186,9 @@ func unlink(staleConn *websocket.Conn) {
 func SqsQueueHandler(message *ktsqs.Message) {
 	go func() {
 		for _, ws := range sockets {
-			bytes, err := json.Marshal(message)
+			bytes, err := json.Marshal(&message)
 			if err != nil {
-				log.Printf("Failed to send text frame on websocket %s; error: %s", ws.Request().RemoteAddr, err.Error())
+				log.Printf("Failed to marshal message received from SQS queue to JSON; error: %s", err.Error())
 			} else {
 				send(bytes, ws)
 			}
